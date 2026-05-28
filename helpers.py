@@ -1,0 +1,120 @@
+import numpy as np
+
+from data_handling import prepare_abalone, prepare_qm7
+from kernels import gaussian_kernel, laplacian_kernel, precompute_inducing_kernels_laplacian, precompute_inducing_kernels_gaussian
+
+
+def make_size_array(limit: int):
+    """
+    Makes an array made of powers of 2.
+
+    :param limit: upper limit (not included) for the power of 2 array.
+    :return:
+    """
+    max_limit = 2**14
+    effective_limit = min(limit, max_limit)
+    sizes = [2**i for i in range(int(np.log2(effective_limit)) + 1) if 2**i < effective_limit]
+    sizes.append(effective_limit)
+    return np.array(sizes, dtype=int)
+
+
+def summarize(df, rank_value):
+    """
+
+    :param df: Dataframe
+    :param rank_value:
+    :return:
+    """
+    dfm = df[df["Rank"] == rank_value]
+    if dfm.empty:
+        return np.nan, np.nan, np.nan, np.nan
+    return (
+        float(dfm["RMSE"].mean()),
+        float(dfm["MAE"].mean()),
+        float(dfm["ELBO"].mean()),
+        float(dfm["TraceErr"].mean()),
+    )
+
+
+def build_L_from_pivots_paper(K: np.ndarray, pivots: list[int], eps: float = 1e-14) -> np.ndarray:
+    """
+
+    :param K:
+    :param pivots:
+    :param eps:
+    :return:
+    """
+    """
+    Reconstruct the Cholesky-consistent factor from a pivot list.
+    """
+    K = np.asarray(K, dtype=np.float64)
+    n = K.shape[0]
+
+    L = np.zeros((n, 0), dtype=np.float64)
+    d = np.diag(K).astype(np.float64).copy()
+
+    for p in pivots:
+        dp = float(d[p])
+        if dp <= eps:
+            raise RuntimeError(f"Pivot {p} selected with nonpositive residual diagonal.")
+
+        if L.shape[1] == 0:
+            tp = K[:, p].copy()
+        else:
+            tp = K[:, p] - (L @ L[p, :])
+
+        up = tp / np.sqrt(dp)
+        L = np.column_stack([L, up])
+
+        d -= up * up
+        np.maximum(d, 0.0, out=d)
+        d[p] = 0.0
+
+    return L
+
+
+# Used for the comparison of pivot selection
+def compute_B(L, sigma2):
+    """
+
+    :param L:
+    :param sigma2:
+    :return:
+    """
+    """
+    Direct computation of
+        B = (I + sigma2^{-1} L^T L)^{-1}
+    """
+    L = np.asarray(L, dtype=np.float64)
+    r = L.shape[1]
+    if r == 0:
+        return np.zeros((0, 0), dtype=np.float64)
+    C = np.eye(r, dtype=np.float64) + (L.T @ L) / sigma2
+    return np.linalg.solve(C, np.eye(r, dtype=np.float64))
+
+
+def dataset_config(dataset: str, fold=None, block_size: int=256):
+    """
+
+    :param dataset:
+    :param fold:
+    :param block_size:
+    :return:
+    """
+    assert dataset in ["Abalone", "QM7"], "Dataset must be either Abalone or QM7."
+
+    if dataset == "Abalone":
+        X_train, X_test, y_train_raw, y_test_raw = prepare_abalone()
+        return (
+            X_train, X_test, y_train_raw, y_test_raw,
+            gaussian_kernel, precompute_inducing_kernels_gaussian,
+            "", "Data/Abalone",
+        )
+    elif dataset == "QM7":
+        assert fold is not None, "QM7 requires a fold argument"
+        X_train, X_test, y_train_raw, y_test_raw = prepare_qm7(fold=fold)
+        return (
+            X_train, X_test, y_train_raw, y_test_raw,
+            laplacian_kernel, precompute_inducing_kernels_laplacian,
+            f"_fold={fold}", "Data/QM7",
+        )
