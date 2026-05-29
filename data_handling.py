@@ -10,6 +10,12 @@ from ucimlrepo import fetch_ucirepo
 
 
 def sort_coulomb_matrices_row_norm(X_cm):
+    """
+    Sort Coulomb matrix.
+
+    :param X_cm: unsorted Coulomb matrix
+    :return: Sorted Coulomb matrix.
+    """
     X_cm = np.asarray(X_cm)
     n, a, b = X_cm.shape
     assert a == b, "Coulomb matrices must be square."

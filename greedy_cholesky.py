@@ -2,10 +2,10 @@ import numpy as np
 
 def greedy_pivots(K: np.ndarray, m:int):
     """
-
-    :param K:
-    :param m:
-    :return:
+    Classical pivoted Cholesky decomposition for a kernel matrix K.
+    :param K (np.ndarray): full nxn kernel matrix
+    :param m (int): target rank.
+    :return: list of pivots.
     """
     n = K.shape[0]
     diags = np.diag(K).copy()

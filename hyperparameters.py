@@ -29,15 +29,15 @@ def optimize_laplacian_gp_hypers_no_variance(X_tr, y_tr, X_val=None, y_val=None,
     :param y_tr ((n,)-ndarray): output data vector on training dataset.
     :param X_val ((n_val, n_val)-ndarray): input data on validation dataset.
     :param y_val ((n_val)-ndarray): output data vector on validation dataset.
-    :param ell0:
-    :param noise0:
+    :param ell0: initial value for kernel width
+    :param noise0: initial value for noise variance
     :param bounds_ell: lower and upper bounds for kernel width.
     :param bounds_noise: lower and upper bounds for noise variance.
     :param maxiter: maximum number of iterations.
     :param jitter: small additive factor used for numerical stability.
     :param objective (str): specified objective function.
-    :param kernel_block:
-    :return:
+    :param kernel_block: compute block size
+    :return: optimized hyperparameters and corresponding objective value.
     """
     x0 = np.array([np.log(ell0), np.log(noise0)], dtype=np.float64)
     bnds = [(np.log(bounds_ell[0]), np.log(bounds_ell[1])), (np.log(bounds_noise[0]), np.log(bounds_noise[1]))]

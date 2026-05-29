@@ -64,26 +64,11 @@ def _woodbury_apply(L: np.ndarray, B: np.ndarray, sigma2: float, v: np.ndarray):
     """
     Apply (sigma2 I + L L^T)^(-1) to v using the Woodbury identity.
 
-    :param L ((n, r)-np.ndarray): approximate Cholesky factor
-    :param B:
-    :param sigma2:
-    :param v:
-    :return:
-    """
-    """
-    Apply (sigma2 I + L L^T)^(-1) to v using the Woodbury identity.
-
-    Parameters
-    ----------
-    L : ndarray, shape (n, r)
-    B : ndarray, shape (r, r)
-        B = (I + sigma2^{-1} L^T L)^{-1}
-    sigma2 : float
-    v : ndarray, shape (n,)
-
-    Returns
-    -------
-    out : ndarray, shape (n,)
+    :param L (np.ndarray): approximate Cholesky factor
+    :param B (np.ndarray): B = (I + sigma2^{-1} L^T L)^{-1}
+    :param sigma2 (float): squared noise variance.
+    :param v (np.ndarray): vector to apply the inverse to.
+    :return: result of application.
     """
     v = np.asarray(v, dtype=np.float64).reshape(-1)
     if sigma2 <= 0:
@@ -99,6 +84,12 @@ def vfe_bound(K, L, B, sigma2, y):
     """
     Compute the VFE lower bound for covariance approximation K \approx L L^T.
 
+    :param K (np.ndarray): kernel matrix.
+    :param L (np.ndarray): Cholesky factor.
+    :param B (np.ndarray): B = (I + sigma2^{-1} L^T L).
+    :param sigma2 (float): squared noise variance.
+    :param y (np.ndarray): Corresponding output data vector.
+    :return: lower bound of VFE approximation.
     """
     K = np.asarray(K, dtype=np.float64)
     L = np.asarray(L, dtype=np.float64)

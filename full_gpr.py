@@ -11,11 +11,12 @@ from metrics import gpr_predict_mean, rmse_mae, gp_neg_log_marginal_likelihood
 
 def full_gpr(dataset:str, fold=None, block_size: int = 256):
     """
+    Run the full GPR routine on a dataset.
 
-    :param dataset:
-    :param fold:
-    :param block_size:
-    :return:
+    :param dataset (str): dataset to run on. Eiterh "Abalone" or "QM7".
+    :param fold: fold specifier for QM7. Leave empty for Abalone.
+    :param block_size (int): block-size for batched kernel evaluation.
+    :return: Dictionary with keys rmse_std, mae_std, rmse_orig, mae_orig, logml, trK
     """
     assert dataset in ["Abalone", "QM7"], "Dataset must be either Abalone or QM7"
     if dataset == "Abalone":

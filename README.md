@@ -1,6 +1,6 @@
 # $\Delta$-VFE Pivoted Cholesky 
 This is the accompanying repository for the paper "Variational Free Energy Pivot Selection for Pivoted Cholesky" by [Louise Schaub](https://louiseschaub.github.io) and [Peter Zaspel](https://peter-zaspel.de).
-You can find the preprint [here]().
+You can find the preprint [here](). 
 
 ## Necessary Libraries 
 For the computations found in the paper, we have used `Python 3.13.11`. In order to execute the code included in this repository, you will need to install:

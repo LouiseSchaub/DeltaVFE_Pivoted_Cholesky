@@ -6,10 +6,10 @@ from kernels import gaussian_kernel, laplacian_kernel, precompute_inducing_kerne
 
 def make_size_array(limit: int):
     """
-    Makes an array made of powers of 2.
+    Generates an array made of powers of 2.
 
     :param limit: upper limit (not included) for the power of 2 array.
-    :return:
+    :return: array with powers of 2 with specified limit.
     """
     max_limit = 2**14
     effective_limit = min(limit, max_limit)
@@ -20,33 +20,28 @@ def make_size_array(limit: int):
 
 def summarize(df, rank_value):
     """
+    Summarizes the mean of RMSE, MAE, ELBO and TraceErr of a dataframe
 
-    :param df: Dataframe
-    :param rank_value:
+    :param df: Dataframe to be summarized
+    :param rank_value: specified rank to summarize at
     :return:
     """
     dfm = df[df["Rank"] == rank_value]
     if dfm.empty:
         return np.nan, np.nan, np.nan, np.nan
-    return (
-        float(dfm["RMSE"].mean()),
-        float(dfm["MAE"].mean()),
-        float(dfm["ELBO"].mean()),
-        float(dfm["TraceErr"].mean()),
-    )
+    return (float(dfm["RMSE"].mean()), float(dfm["MAE"].mean()), float(dfm["ELBO"].mean()),
+            float(dfm["TraceErr"].mean()))
 
 
 def build_L_from_pivots_paper(K: np.ndarray, pivots: list[int], eps: float = 1e-14) -> np.ndarray:
     """
+    Use a sequence of pivots and reconstruct the (approximate) Cholesky factor from a Nystrom approximation.
+    :param K (np.ndarray): full nxn kernel matrix.
+    :param pivots: iterable list of pivots.
+    :param eps: numerical safeguard.
+    :return: reconstructed Cholesky factor.
+    """
 
-    :param K:
-    :param pivots:
-    :param eps:
-    :return:
-    """
-    """
-    Reconstruct the Cholesky-consistent factor from a pivot list.
-    """
     K = np.asarray(K, dtype=np.float64)
     n = K.shape[0]
 
@@ -76,14 +71,11 @@ def build_L_from_pivots_paper(K: np.ndarray, pivots: list[int], eps: float = 1e-
 # Used for the comparison of pivot selection
 def compute_B(L, sigma2):
     """
+    Compute B = (I + sigma2^{-1} L^T L)^{-1} from scratch.
 
-    :param L:
-    :param sigma2:
-    :return:
-    """
-    """
-    Direct computation of
-        B = (I + sigma2^{-1} L^T L)^{-1}
+    :param L (np.ndarray): Cholesky factor.
+    :param sigma2 (float): squared noise vairance
+    :return: Direct computation of B
     """
     L = np.asarray(L, dtype=np.float64)
     r = L.shape[1]
@@ -93,12 +85,12 @@ def compute_B(L, sigma2):
     return np.linalg.solve(C, np.eye(r, dtype=np.float64))
 
 
-def dataset_config(dataset: str, fold=None, block_size: int=256):
+def dataset_config(dataset: str, fold=None):
     """
+    Prepare the dataset and return the corresponding dataset split.
 
-    :param dataset:
-    :param fold:
-    :param block_size:
+    :param dataset (str): Either "Abalone" or "QM7"
+    :param fold: use None for Abalone. Otherwise, the specific fold integer for "QM7"
     :return:
     """
     assert dataset in ["Abalone", "QM7"], "Dataset must be either Abalone or QM7."
@@ -106,15 +98,10 @@ def dataset_config(dataset: str, fold=None, block_size: int=256):
     if dataset == "Abalone":
         X_train, X_test, y_train_raw, y_test_raw = prepare_abalone()
         return (
-            X_train, X_test, y_train_raw, y_test_raw,
-            gaussian_kernel, precompute_inducing_kernels_gaussian,
-            "", "Data/Abalone",
-        )
+            X_train, X_test, y_train_raw, y_test_raw, gaussian_kernel, precompute_inducing_kernels_gaussian, "",
+            "Data/Abalone")
     elif dataset == "QM7":
         assert fold is not None, "QM7 requires a fold argument"
         X_train, X_test, y_train_raw, y_test_raw = prepare_qm7(fold=fold)
-        return (
-            X_train, X_test, y_train_raw, y_test_raw,
-            laplacian_kernel, precompute_inducing_kernels_laplacian,
-            f"_fold={fold}", "Data/QM7",
-        )
+        return (X_train, X_test, y_train_raw, y_test_raw, laplacian_kernel, precompute_inducing_kernels_laplacian,
+                f"_fold={fold}", "Data/QM7")

@@ -1,4 +1,6 @@
-"""Shared plotting theme, data loading, aggregation, and figure helpers."""
+"""
+Shared plotting theme, data loading, aggregation, and figure helpers.
+"""
 from __future__ import annotations
 
 import glob

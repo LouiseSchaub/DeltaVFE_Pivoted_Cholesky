@@ -33,16 +33,13 @@ def woodbury_apply_matrix(L: np.ndarray, B: np.ndarray, sigma2: float, v: np.nda
 
 def woodbury_apply_vector(L: np.ndarray, B: np.ndarray, sigma2: float, v: np.ndarray) -> np.ndarray:
     """
-    Vector onvenience wrapper for the batched Woodbury apply
+    Vector convenience wrapper for the batched Woodbury apply
 
-    :param L:
-    :param B:
-    :param sigma2:
-    :param v:
-    :return: vector
-    """
-    """
-    Vector convenience wrapper around the batched Woodbury apply.
+    :param L (np.ndarray): Cholesky factor.
+    :param B (np.ndarray): Woodbury-inverse
+    :param sigma2 (float): squared noise variance
+    :param v (np.ndarray): vector that the Woodbury inverse should be applied to.
+    :return: \Sigma_i^{-1}v
     """
     z = woodbury_apply_matrix(L, B, sigma2, np.asarray(v, dtype=np.float64).reshape(-1, 1))
     return z[:, 0]
@@ -50,18 +47,17 @@ def woodbury_apply_vector(L: np.ndarray, B: np.ndarray, sigma2: float, v: np.nda
 
 def update_B(B: np.ndarray, L: np.ndarray, u: np.ndarray, sigma2: float, eps: float = 1e-14) -> np.ndarray:
     """
-
-    :param B:
-    :param L:
-    :param u:
-    :param sigma2:
-    :param eps:
-    :return:
-    """
-    """
-    Lemma 5.3 block update:
+    Lemma 5.3 block update for B.
         B_new = (I + sigma2^{-1} [L u]^T [L u])^{-1}
+
+    :param B (np.ndarray): current B to be updated.
+    :param L (np.ndarray): Cholesky factor.
+    :param u (np.ndarray): rank-1 update
+    :param sigma2 (float): squared noise variance
+    :param eps (float): numerical safeguqad
+    :return: updated B
     """
+
     u = np.asarray(u, dtype=np.float64).reshape(-1)
     r = L.shape[1]
 
@@ -93,43 +89,18 @@ def delta_vfe_pivots_batched(K: np.ndarray, y: np.ndarray, m: int, sigma2: float
         - normalize all candidate directions at once
         - apply Woodbury to all candidates at once
         - score all candidates at once
-        - append best candidate and update B, d, pivots
+        - append the best candidate and update B, d, pivots
 
 
-    :param K:
-    :param y:
-    :param m:
-    :param sigma2:
-    :param s:
-    :param seed:
-    :param stop_if_nonpositive_gain (bool):
-    :param eps:
-    :return:
-    """
-    """
-    This follows Algorithm 5.2 and Remark 5.4:
-    
-    Parameters
-    ----------
-    K : ndarray, shape (n, n)
-        Symmetric PSD kernel matrix.
-    y : ndarray, shape (n,)
-    m : int
-        Maximum number of pivots.
-    sigma2 : float
-        Observation noise variance.
-    s : int
-        Batch size.
-    seed : int
-        RNG seed.
-    stop_if_nonpositive_gain : bool
-        Optional safeguard. Leave False for the most paper-faithful behavior.
-    eps : float
-        Small numerical threshold.
-
-    Returns
-    -------
-    pivots : list[int]
+    :param K (np.ndarray): full nxn kernel matrix to approximate
+    :param y (np.ndarray): output data vector.
+    :param m (int): maximum target rank.
+    :param sigma2 (float): squared noise variance.
+    :param s (int): batch factor.
+    :param seed (int): RNG seed.
+    :param stop_if_nonpositive_gain (bool): optional safeguard. Leave False for behaviour that is faithful to the paper.
+    :param eps: numerical safeguqad.
+    :return: list of pivots.
     """
     K = np.asarray(K, dtype=np.float64)
     y = np.asarray(y, dtype=np.float64).reshape(-1)

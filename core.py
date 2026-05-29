@@ -24,16 +24,16 @@ def evaluate_at_ranks(K_full: np.ndarray, Kmm_full: np.ndarray, Knm_full: np.nda
     approximation is rebuilt from scratch via a Cholesky factorization of K_ZZ[:r, :r] and a Woodbury solve.
     All quantities are recomputed at each rank to ensure comparability of the pivot sequence.
 
-    :param K_full: full nxn kernel matrix
-    :param Kmm_full: kernel matrix using m pivots
-    :param Knm_full:
-    :param Ktm_full:
-    :param sigma2: squared noise variance
-    :param y_train: output data vector from the training dataset.
-    :param y_test: output data vector from the test dataset.
-    :param ranks: list of ranks
+    :param K_full (np.ndarray): full nxn kernel matrix. Used for the trace term and the VFE bound.
+    :param Kmm_full (np.ndarray): mxm inducing-inducing kernel matrix for the full pivot set.
+    :param Knm_full (np.ndarray): nxm train-inducing cross-kernel matrix.
+    :param Ktm_full (np.ndarray): n_testxm test-inducing cross-kernel matrix
+    :param sigma2 (float): squared noise variance
+    :param y_train (np.ndarray): output data vector from the training dataset (standardized).
+    :param y_test (np.ndarray): output data vector from the test dataset (standardized).
+    :param ranks: list of ranks for evaluation (iterable). Ranks outside [1, m] are discarded.
     :param jitter: small additive factor used for numerical stability.
-    :return:
+    :return: Dictionary mapping each rank  r to a tuple (rmse, mae, elbo, trace_err).
     """
 
     y_train = np.asarray(y_train, dtype=np.float64).reshape(-1)
@@ -77,22 +77,31 @@ def run_method(method_name: str, pivot_fn, K_full: np.ndarray, X_train: np.ndarr
                kernel_precompute_fn, ell: float, sigma2: float, y_train_std: np.ndarray, y_test_std: np.ndarray,
                ranks, m: int, block_size: int=256, seeds=None):
     """
+    Run one pivot-selection method across multiple seed and log quality metrics at every rank.
+    For each seed, the pivot function is called to obtain a pivot list of length up to m. The inducing-kernel blocks
+    are then precomputed for those pivots. Metrics are evaluated at all requested ranks via evaluate_at_ranks.
 
-    :param method_name:
-    :param pivot_fn:
-    :param K_full:
-    :param X_train:
-    :param X_test:
-    :param kernel_precompute_fn:
-    :param ell:
-    :param sigma2:
-    :param y_train_std:
-    :param y_test_std:
-    :param ranks: rank sequence (to be evaluated at)
-    :param m: max. target rank
-    :param block_size:
-    :param seeds: seed sequence
-    :return: DataFrame
+    All randomized methods should receive the same seed array so that results across different methods and different
+    values of s are directly comparable run-by-run.
+
+    :param method_name (str): label written to the "Method" column of the ouput DataFrame.
+    :param pivot_fn: Callable with signature pivot_fn(seed: int) -> list[int], returning up to m pivot indices.
+                    Deterministic methods may ignore the seed.
+    :param K_full (np.ndarray): full nxn kernel matrix.
+    :param X_train (np.ndarray): training dataset.
+    :param X_test (np.ndarray): training dataset.
+    :param kernel_precompute_fn: Callable with signature (X_train, X_test, piv, ell, block_size) -> (Kmm, Knm, Ktm).
+            It builds three inducing-kernel blocks for the given pivot list. Must match the kernel used to build K_full.
+    :param ell (float): kernel width parameter.
+    :param sigma2 (float): squared noise variance.
+    :param y_train_std (np.ndarray): output data vector from the training dataset (standardized).
+    :param y_test_std (np.ndarray): output data vector from the test dataset (standardized)
+    :param ranks: iterable of integer ranks (to be evaluated at)
+    :param m (int): max. target rank
+    :param block_size (int): block-size for batched kernel matrix evaluation.
+    :param seeds: iterable of integer seeds.
+    :return: DataFrame with one row per (run, rank) and columns: Method, RunID, Seed, Rank, Kernelwidth, Noise2,
+            RMSE, MAE, ELBO, TraceErr, RunWallTimeSec, m_eff
     """
 
     rows = []
@@ -144,13 +153,42 @@ def run_method(method_name: str, pivot_fn, K_full: np.ndarray, X_train: np.ndarr
 
     return pd.DataFrame(rows)
 
-def _baseline_cache_path(out_dir: str, fold_label, ell: float, sigma2: float):
+def _baseline_cache_path(out_dir: str, fold_label: str, ell: float, sigma2: float):
+    """
+    Return the path for the full-GP baseline CSV.
+
+    :param out_dir (str): output directory for this dataset.
+    :param fold_label (str): fold string. "" for Abalone and "_fold=k" for QM7.
+    :param ell (float): kernel width parameter.
+    :param sigma2 (float): squared noise variance.
+    :return: Path string.
+    """
     return f"{out_dir}/Full/baseline{fold_label}_kernelwidth={ell}_noise2={sigma2}.csv"
 
 def _compute_or_load_baseline(K: np.ndarray, X_train: np.ndarray, X_test: np.ndarray, y_train_raw: np.ndarray,
                               y_test_raw: np.ndarray, y_train_std: np.ndarray, y_test_std: np.ndarray, scalery,
                               kernel_fn, ell: float, sigma2: float, out_dir: str, fold_label, block_size: int,
                               force_recompute:bool):
+    """
+    Compute the full-GP baseline metrics or load them from a CSV if available.
+
+    :param K (np.ndarray): full nxn kernel matrix.
+    :param X_train (np.ndarray): nxd training feature matrix.
+    :param X_test (np.ndarray): n_testxd test feature matrix.
+    :param y_train_raw (np.ndarray): unstandardized training output vector.
+    :param y_test_raw (np.ndarray): unstandardized test output vector.
+    :param y_train_std (np.ndarray): standardized training output vector.
+    :param y_test_std (np.ndarray): standardized test output vector.
+    :param scalery: fitted StandardScaler for y, used to invert prediction to the original scale.
+    :param kernel_fn: callable (X1, X2, ell, block_size) -> kernel matrix
+    :param ell (float): kernel width parameter.
+    :param sigma2 (float): squared noise variance.
+    :param out_dir (str): output directory for this dataset.
+    :param fold_label (str): fold string. "" for Abalone and "_fold=k" for QM7.
+    :param block_size (int): block-size for batched kernel matrix evaluation.
+    :param force_recompute (bool): if true: recompute even when a CSV already exists.
+    :return: Dictionary with keys: Kernelwidth, Noise2, TrK, n_train, RMSE_std, MAE_std, RMSE_orig, MAE_orig, Logml.
+    """
     cache_path = _baseline_cache_path(out_dir, fold_label, ell, sigma2)
 
     if not force_recompute and os.path.exists(cache_path):
@@ -191,23 +229,30 @@ def run_full_experiment(*, dataset: str, fold=None, ell: float, sigma2: float, m
                         run_rpcholesky: bool =True, run_deltavfe: bool = True, skip_baseline: bool = False,
                         force_recompute_baseline: bool = False):
     """
+    Run the complete experimental pipeline for one (dataset, fold) configuration.
+    All randomized methods share a common per-run seed sequence. The seed sequence is saved alongside the results
+    Output CSV naming convention (from _csv_path):
+        {out_dir}/{Method}/{base}{fold_label}_kernelwidth={ell}_noise2={sigma2}_m={m}[_s={s}].csv
 
-    :param dataset:
-    :param fold:
-    :param ell:
-    :param sigma2:
-    :param kernel_precompute_fn:
-    :param m:
-    :param s_values:
-    :param runs:
-    :param master_seed:
-    :param block_size:
-    :param run_greedy:
-    :param run_rpcholesky:
-    :param run_deltavfe:
-    :param skip_baseline:
-    :param force_recompute_baseline:
-    :return:
+    The combined DeltaVFE file containing all s values is written as:
+        {out_dir}/DeltaVFE/deltavfe_ALLS{fold_label}_kernelwidth={ell}_noise2={sigma2}_m={m}.csv
+
+
+    :param dataset (str): dataset identifier. Must either be "Abalone" or "QM7".
+    :param fold (int): fold for QM7. Must be in [0,4]. Ignored for Abalone.
+    :param ell (float): kernel width parameter.
+    :param sigma2 (float): squared noise variance.
+    :param m (int): maximum target rank.
+    :param s_values: iterable of batch sizes s for DeltaVFE. Each value produces its own CSV.
+    :param runs (int): number of independent runs for randomized methods.
+    :param master_seed (int) seed used to generate the shared per-run seed sequence.:
+    :param block_size (int): block-size for batched kernel matrix evaluation.
+    :param run_greedy (bool): whether to run or not-run greedy pivoted Cholesky.
+    :param run_rpcholesky (bool): whether to run or not-run RPCholesky.
+    :param run_deltavfe (bool): whether to run or not-run DeltaVFE pivoted Cholesky.
+    :param skip_baseline (bool): whether to include the full GP-baseline or not.
+    :param force_recompute_baseline (bool): if True, recompute the full GP-baseline even if a CSV exists.
+    :return: Dictionary with keys baseline, seeds
     """
 
     # Load data and dataset-specific config
@@ -259,7 +304,7 @@ def run_full_experiment(*, dataset: str, fold=None, ell: float, sigma2: float, m
             f"{base}{fold_label}_kernelwidth={ell}_noise2={sigma2}_m={m}{s_part}.csv"
         )
 
-    # === RUN METHODS ===
+    # RUN METHODS
     if run_greedy:
         df_greedy = run_method(method_name="Greedy", pivot_fn=lambda seed: greedy_pivots(K,m), **common_kwargs)
         path = _csv_path("Greedy", "greedy")
@@ -280,7 +325,7 @@ def run_full_experiment(*, dataset: str, fold=None, ell: float, sigma2: float, m
             df_vfe = run_method(method_name=f"DeltaVFE_s={s}",
                                 pivot_fn=lambda seed, s=s: delta_vfe_pivots_batched(K, y_train_std, m, sigma2, s=s,
                                                                                     seed=seed,
-                                                                                    stop_if_nonpositive_gain=True,),
+                                                                                    stop_if_nonpositive_gain=True),
                 **common_kwargs)
             path = _csv_path("DeltaVFE", "deltavfe", s=s)
             df_vfe.to_csv(path, index=False)

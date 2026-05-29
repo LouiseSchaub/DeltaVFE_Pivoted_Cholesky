@@ -2,16 +2,14 @@ import numpy as np
 
 def laplacian_kernel(X, Z, ell, block_size=256):
     """
+    Compute Laplacian kernel between X and Z.
+        k(x,z) = exp(-||x-z||_1 / (ell^2))
 
-    :param X:
-    :param Z:
-    :param ell:
-    :param block_size:
-    :return:
-    """
-    """
-    k(x,z) = exp(-||x-z||_1 / (ell^2))
-    Computed in blocks to control memory.
+    :param X (np.ndarray): first data.
+    :param Z (np.ndarray) second data.
+    :param ell (float): kenerl width parameter
+    :param block_size: block-size for batched kernel evaluation.
+    :return: Laplacian kernel matrix K
     """
     X = np.asarray(X, dtype=np.float64)
     Z = np.asarray(Z, dtype=np.float64)
@@ -32,16 +30,14 @@ def laplacian_kernel(X, Z, ell, block_size=256):
 
 def gaussian_kernel(X, Z, ell, block_size=256):
     """
+    Compute Gaussian kernel between X and Z.
+        k(x,z) = exp(-||x-z||^2 / (2*ell^2))
 
-    :param X:
-    :param Z:
-    :param ell:
-    :param block_size:
-    :return:
-    """
-    """
-    k(x,z) = exp(-||x-z||^2 / (2*ell^2))
-    Computed in blocks to control memory.
+    :param X (np.ndarray): first data.
+    :param Z (np.ndarray: second data.
+    :param ell (float): kernel width parameter.
+    :param block_size (int) block_size for batched kernel evaluation.
+    :return: Gaussian kernel matrix K
     """
     X = np.asarray(X, dtype=np.float64)
     Z = np.asarray(Z, dtype=np.float64)
@@ -73,13 +69,14 @@ def gaussian_kernel(X, Z, ell, block_size=256):
 
 def precompute_inducing_kernels_laplacian(X_train, X_test, pivots, ell, block_size=256):
     """
+    Compute kernel matrix blocks for the Laplacian using a list of pivots.
 
-    :param X_train:
-    :param X_test:
-    :param pivots:
-    :param ell:
-    :param block_size:
-    :return:
+    :param X_train (np.ndarray): training data set.
+    :param X_test (np.ndarray): test data set.
+    :param pivots (list): iterable of integer pivots.
+    :param ell (float): kernel width parameter.
+    :param block_size (int): block_size for batched kernel evaluation.
+    :return: partitioned kernel matrix based on the pivot sequence.
     """
     pivots = list(pivots)
     Z = X_train[pivots, :]
@@ -91,13 +88,14 @@ def precompute_inducing_kernels_laplacian(X_train, X_test, pivots, ell, block_si
 
 def precompute_inducing_kernels_gaussian(X_train, X_test, pivots, ell, block_size=256):
     """
+    Compute kernel matrix blocks for the Gaussian using a list of pivots.
 
-    :param X_train:
-    :param X_test:
-    :param pivots:
-    :param ell:
-    :param block_size:
-    :return:
+    :param X_train (np.ndarray): training data set.
+    :param X_test (np.ndarray): test data set.
+    :param pivots (list): iterable of integer pivots.
+    :param ell (float): kernel width parameter.
+    :param block_size (int): block_size for batched kernel evaluation.
+    :return: partitioned kernel matrix based on the pivot sequence.
     """
     pivots = list(pivots)
     Z = X_train[pivots, :]

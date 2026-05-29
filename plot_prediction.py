@@ -1,5 +1,5 @@
 """
-Use this script to produce Figure 2, i.e. a side-by-side prediction error for Abalone and QM7.
+Use this script to produce Figure 2, i.e. a side-by-side prediction error for Abalone (left) and QM7 (right).
 """
 import os
 from matplotlib import gridspec
@@ -49,4 +49,4 @@ if __name__ == "__main__":
     rmse_abalone, _ = load_full_baseline("abalone")
 
     plot_prediction_side_by_side(qm7, abalone, mae_qm7, rmse_abalone,
-                                 outfile=os.path.join(PLOTS_DIR, "abalone_qm7_prediction_error_side_by_side_test.pdf"))
+                                 outfile=os.path.join(PLOTS_DIR, "abalone_qm7_prediction_error_side_by_side.pdf"))

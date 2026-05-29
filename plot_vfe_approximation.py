@@ -9,11 +9,9 @@ import os
 from matplotlib import gridspec
 import matplotlib.pyplot as plt
 
-from plot_utils import (
-    METHODS, PLOTS_DIR, aggregate_vfe, format_panel, load_full_baseline,
-    load_method_data, load_trace, matplotlib_line_errorbars, save_show,
-    seaborn_line_ci95, seaborn_line_sd, shared_legend,
-)
+from plot_utils import (METHODS, PLOTS_DIR, aggregate_vfe, format_panel, load_full_baseline, load_method_data,
+                        load_trace, matplotlib_line_errorbars, save_show, seaborn_line_ci95, seaborn_line_sd,
+                        shared_legend)
 
 VFE_LABEL = r"$(\mathcal{F}(K)-\mathcal{L}(\widetilde{K}))/|\mathcal{F}(K)|$"
 TRACE_LABEL = r"$|\,\mathrm{tr}(K)-\mathrm{tr}(\widetilde K)\,|/\mathrm{tr}(K)$"
@@ -50,4 +48,4 @@ if __name__ == "__main__":
     abalone = aggregate_vfe(load_method_data("abalone", load_trace("abalone")), "abalone", elbo_abalone)
 
     plot_fourpanel(qm7, abalone,
-                   outfile=os.path.join(PLOTS_DIR, "abalone_qm7_relative_vfe_relative_approx_fourpanel_log_test.pdf"))
+                   outfile=os.path.join(PLOTS_DIR, "abalone_qm7_relative_vfe_relative_approx_fourpanel_log.pdf"))
