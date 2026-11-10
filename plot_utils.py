@@ -5,21 +5,41 @@ from __future__ import annotations
 
 import glob
 import os
-from pathlib import Path
+import re
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from matplotlib.ticker import ScalarFormatter
+from matplotlib.ticker import FuncFormatter, LogLocator
 
 # Global configuration
-QM7_DATA_DIR = "Data/QM7"
-ABALONE_DATA_DIR = "Data/Abalone"
 PLOTS_DIR = "Plots"
 VFE_GAP_FLOOR = 1e-12
 METHODS = ["Greedy", "RPCholesky", "DeltaVFE"]
+
+# Per dataset: result folder, prediction-error measure(s) (first available column is used), default batch factor s for
+# the method comparison, and the error band (sd or 95% confidence interval over the runs).
+DATASETS = {
+    "Abalone": dict(dir="Data/Abalone", error=("RMSE",), s=8, band="sd"),
+    "QM7":     dict(dir="Data/QM7", error=("MAE_orig", "MAE"), s=16, band="ci95", unit="kcal/mol"),
+    "KIN40K":  dict(dir="Data/KIN40K", error=("SMSE",), s=32, band="ci95"),
+    "QM9":     dict(dir="Data/QM9", error=("MAE_orig", "MAE"), s=32, band="ci95", unit="eV"),
+}
+QM7_DATA_DIR = DATASETS["QM7"]["dir"]
+ABALONE_DATA_DIR = DATASETS["Abalone"]["dir"]
+
+VFE_REL_LABEL = r"$(\mathcal{F}(K)-\mathcal{L}(\widetilde{K}))/|\mathcal{F}(K)|$"
+VFE_PP_LABEL = r"$(\mathcal{F}(K)-\mathcal{L}(\widetilde{K}))/n$"
+TRACE_LABEL = r"$|\,\mathrm{tr}(K)-\mathrm{tr}(\widetilde K)\,|/\mathrm{tr}(K)$"
+METRIC_LABELS = {"VFEGapRel": VFE_REL_LABEL, "VFEGapPerPoint": VFE_PP_LABEL,
+                 "VFEGap": r"$\mathcal{F}(K)-\mathcal{L}(\widetilde{K})$", "TraceErrRel": TRACE_LABEL,
+                 "RMSE": "RMSE", "MAE": "MAE", "SMSE": "SMSE", "MSLL": "MSLL", "NLPD": "NLPD",
+                 "RMSE_orig": "RMSE", "MAE_orig": "MAE"}
+LINEAR_METRICS = {"MSLL", "NLPD"}          # may be negative: linear y-axis
+# column of the full-GP baseline file that corresponds to a metric of the result files
+BASELINE_COLUMN = {"RMSE": "RMSE_std", "MAE": "MAE_std", "RMSE_orig": "RMSE_orig", "MAE_orig": "MAE_orig", "SMSE": "SMSE"}
 
 os.makedirs(PLOTS_DIR, exist_ok=True)
 
@@ -31,13 +51,59 @@ sns.set_context(context="paper", font_scale=1.35, rc={"lines.linewidth": 1.6, "l
                                                       "axes.titlesize": 11, "xtick.labelsize": 10,
                                                       "ytick.labelsize": 10})
 
-STYLE = {
-    "Greedy":     dict(color="deepskyblue", linestyle="--",              marker="o"),
-    "RPCholesky": dict(color="chocolate",   linestyle=(8, (5, 7)),       marker="s"),
-    "DeltaVFE":   dict(color="forestgreen", linestyle=(2, (2, 1, 2, 7)), marker="^"),
+# All figures take their colours from viridis (colour-blind safe, readable in greyscale). Positions on the colour map
+# from 0 (dark purple) to 1 (yellow); the palest end (> 0.9) is avoided because it fades on white.
+def viridis(t: float) -> str:
+    return mpl.colors.to_hex(mpl.colormaps["viridis"](t))
+
+
+COLORS = {
+    "Greedy":     viridis(0.00),   # dark purple
+    "RPCholesky": viridis(0.33),   # blue
+    "DeltaVFE":   viridis(0.67),   # green
 }
+STYLE = {
+    "Greedy":     dict(color=COLORS["Greedy"],     linestyle="--",              marker="o"),
+    "RPCholesky": dict(color=COLORS["RPCholesky"], linestyle=(8, (5, 7)),       marker="s"),
+    "DeltaVFE":   dict(color=COLORS["DeltaVFE"],   linestyle=(2, (2, 1, 2, 7)), marker="^"),
+}
+# Values of s of Delta-VFE: the green-to-yellow part of viridis around COLORS["DeltaVFE"], away from RPCholesky's blue.
+S_RANGE = (0.48, 0.90)
+
+
+def s_colors(s_values) -> dict:
+    """Colour of each s (sorted ascending), spread evenly over S_RANGE of viridis."""
+    s_values = sorted(s_values)
+    pos = np.linspace(*S_RANGE, len(s_values)) if len(s_values) > 1 else [0.67]
+    return {s: viridis(t) for s, t in zip(s_values, pos)}
 METHOD_LABELS = {"Greedy": "Greedy", "RPCholesky": "RPCholesky", "DeltaVFE": r"$\Delta$-VFE"}
+
+# Figure sizes and grid layouts of the original plotting scripts, used by every figure:
+#   one row of panels plus a legend row (as Figure 2, prediction error side by side)
+FIGSIZE_ROW = (10.8, 5.4)
+GRID_ROW = dict(height_ratios=[5, 1.15], hspace=0.25, wspace=0.25)
+#   two rows of panels plus a legend row (as Figure 1, four panels)
+FIGSIZE_TWO_ROWS = (10.8, 8.4)
+GRID_TWO_ROWS = dict(height_ratios=[5, 5, 1.2], hspace=0.28, wspace=0.25)
+#   two rows of panels plus a legend row (as Figure 3, comparison of s)
+FIGSIZE_S_COMPARISON = (11.2, 9.0)
+GRID_S_COMPARISON = dict(height_ratios=[5, 5, 1.2], hspace=0.35, wspace=0.28)
 ERRORBAR_KWS = dict(err_style="bars", err_kws={"capsize": 2})
+
+
+def dataset_info(dataset: str) -> dict:
+    if dataset not in DATASETS:
+        raise ValueError(f"dataset must be one of {list(DATASETS)}")
+    return DATASETS[dataset]
+
+
+def metric_label(metric: str, dataset: str | None = None) -> str:
+    label = METRIC_LABELS.get(metric, metric)
+    unit = DATASETS.get(dataset, {}).get("unit")
+    if metric in ("RMSE_orig", "MAE_orig") and unit:
+        label += f" [{unit}]"
+    return label
+
 
 # File loading
 def load_csvs(pattern: str) -> pd.DataFrame:
@@ -47,59 +113,6 @@ def load_csvs(pattern: str) -> pd.DataFrame:
     return pd.concat([pd.read_csv(f).assign(__source__=os.path.basename(f)) for f in files], ignore_index=True)
 
 
-def load_csvs_any(*patterns: str) -> pd.DataFrame:
-    """
-    Load all CSVs matching the first non-empty pattern. Supports different file naming conventions.
-    """
-    for pattern in patterns:
-        files = sorted(glob.glob(pattern))
-        if files:
-            return pd.concat([pd.read_csv(f).assign(__source__=os.path.basename(f)) for f in files], ignore_index=True)
-    raise FileNotFoundError(f"No files matched any of: {patterns}")
-
-
-def first_existing(*patterns: str) -> list[str]:
-    for pattern in patterns:
-        files = sorted(glob.glob(pattern))
-        if files:
-            return files
-    raise FileNotFoundError(f"No files matched any of: {patterns}")
-
-
-def full_baseline_files(dataset: str) -> list[str]:
-    """
-    Return full-baseline files, using the filename convention to separate datasets.
-
-    New baseline files contain all full quantities in one CSV.  Files with ``fold=`` in the name are QM7 fold baselines,
-    while files without ``fold=`` are Abalone baselines.
-    """
-    if dataset == "qm7":
-        return first_existing(
-            f"{QM7_DATA_DIR}/Full/baseline_fold=*_kernelwidth=*_noise2=*.csv",
-            f"{QM7_DATA_DIR}/Full/full_laplacian_fold=*_hypers*.dat",
-        )
-
-    if dataset == "abalone":
-        files = sorted(glob.glob(f"{ABALONE_DATA_DIR}/Full/baseline_kernelwidth=*_noise2=*.csv"))
-        files = [f for f in files if "fold=" not in os.path.basename(f)]
-        if files:
-            return files
-        return first_existing(f"{ABALONE_DATA_DIR}/Full/full_gaussian*_hypers*.dat")
-
-    raise ValueError("dataset must be 'qm7' or 'abalone'")
-
-
-def scalar(df: pd.DataFrame, *columns: str) -> float:
-    for col in columns:
-        if col in df.columns:
-            return float(df[col].iloc[0])
-    raise KeyError(f"None of {columns} found in columns {list(df.columns)}")
-
-
-def fold_from_name(name: str) -> float:
-    return pd.to_numeric(pd.Series([Path(name).name]).str.extract(r"fold=(\d+)")[0], errors="coerce").iloc[0]
-
-
 def to_numeric(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     for col in columns:
         if col in df.columns:
@@ -107,128 +120,41 @@ def to_numeric(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     return df
 
 
-def add_fold_from_source(df: pd.DataFrame) -> pd.DataFrame:
-    df["Fold"] = pd.to_numeric(df["__source__"].astype(str).str.extract(r"fold=(\d+)")[0], errors="coerce").astype("Int64")
-    return df
-
-
 def add_s_from_source(df: pd.DataFrame) -> pd.DataFrame:
     df["s"] = pd.to_numeric(df["__source__"].astype(str).str.extract(r"_s=(\d+)")[0], errors="coerce")
     return df
 
-# Shared data loaders
-def load_full_baseline(dataset: str) -> tuple[float, float]:
-    files = full_baseline_files(dataset)
-    err_cols = ("MAE_std", "MAE Std", "MAE_orig") if dataset == "qm7" else ("RMSE_std", "RMSE Std", "RMSE_orig")
 
-    dfs = [pd.read_csv(f) for f in files]
-    err = float(np.mean([scalar(df, *err_cols) for df in dfs]))
-    elbo = float(np.mean([scalar(df, "Logml", "ELBO") for df in dfs]))
-    return err, elbo
+def _m_of(path: str) -> int:
+    return int(re.search(r"_m=(\d+)", os.path.basename(path)).group(1))
 
 
-def load_full_folds_qm7() -> pd.DataFrame:
-    rows = []
-    for f in full_baseline_files("qm7"):
-        df = pd.read_csv(f)
-        rows.append({
-            "Fold": fold_from_name(f),
-            "MAE": scalar(df, "MAE_std", "MAE Std", "MAE_orig"),
-            "ELBO": scalar(df, "Logml", "ELBO"),
-            "TrK": scalar(df, "TrK") if "TrK" in df.columns else np.nan,
-        })
-    return pd.DataFrame(rows).sort_values("Fold").reset_index(drop=True)
-
-
-def load_trace(dataset: str) -> pd.DataFrame:
-    if dataset == "qm7":
-        try:
-            files = full_baseline_files("qm7")
-        except FileNotFoundError:
-            files = first_existing(f"{QM7_DATA_DIR}/Full/trace_laplacian_fold=*_kernelwidth=*_noise2=*.csv")
-        return pd.DataFrame([{"Fold": fold_from_name(f), "TrK": float(pd.read_csv(f)["TrK"].iloc[0])} for f in files]).sort_values("Fold").reset_index(drop=True)
-
-    if dataset == "abalone":
-        try:
-            files = full_baseline_files("abalone")
-        except FileNotFoundError:
-            files = first_existing(f"{ABALONE_DATA_DIR}/Full/trace_gaussian*.csv")
-        rows = []
-        for f in files:
-            df = pd.read_csv(f)
-            rows.append({
-                "TrK": float(df["TrK"].iloc[0]),
-                "Kernelwidth": float(df["Kernelwidth"].iloc[0]) if "Kernelwidth" in df.columns else np.nan,
-                "Noise2": float(df["Noise2"].iloc[0]) if "Noise2" in df.columns else np.nan,
-            })
-        return pd.DataFrame(rows)
-
-    raise ValueError("dataset must be 'qm7' or 'abalone'")
-
-
-def method_patterns(dataset: str, s: int = 16) -> dict[str, tuple[str, ...]]:
+def method_files(dataset: str, method: str, s="*", m: int | None = None) -> list[str]:
     """
-    Patterns for method result files.
-
-    New convention from ``run_full_experiment``:
-      QM7:     method_fold=<k>_kernelwidth=<ell>_noise2=<sigma2>_m=2048[ _s=<s>].csv
-      Abalone: method_kernelwidth=<ell>_noise2=<sigma2>_m=2048[ _s=<s>].csv
-
-    The DeltaVFE patterns intentionally target the per-s files only and do NOT match ``deltavfe_ALLS...csv``!
+    Result files of one method written by core.run_full_experiment:
+        {dir}/{Method}/{method}_kernelwidth=<ell>_noise2=<sigma2>_m=<m>[_s=<s>].csv
+    Files with a fold label (results of the former five-fold QM7 setup) and the combined deltavfe_ALLS files do not match.
+    If m is None, the largest available m is used.
     """
-    root = QM7_DATA_DIR if dataset == "qm7" else ABALONE_DATA_DIR
-    if dataset == "qm7":
-        return {
-            "Greedy": (
-                f"{root}/Greedy/greedy_fold=*_kernelwidth=*_noise2=*_m=2048.csv",
-                f"{root}/Greedy/greedy_*fold=*_m=2048*.csv",
-            ),
-            "RPCholesky": (
-                f"{root}/RPCholesky/rpcholesky_fold=*_kernelwidth=*_noise2=*_m=2048.csv",
-                f"{root}/RPCholesky/rpcholesky_*fold=*_m=2048*.csv",
-            ),
-            "DeltaVFE": (
-                f"{root}/DeltaVFE/deltavfe_fold=*_kernelwidth=*_noise2=*_m=2048_s={s}.csv",
-                f"{root}/DeltaVFE/deltavfe_*fold=*_m=2048*_s={s}*.csv",
-            )}
-
-    if dataset == "abalone":
-        return {
-            "Greedy": (
-                f"{root}/Greedy/greedy_kernelwidth=*_noise2=*_m=2048.csv",
-                f"{root}/Greedy/greedy_*_m=2048*.csv",
-            ),
-            "RPCholesky": (
-                f"{root}/RPCholesky/rpcholesky_kernelwidth=*_noise2=*_m=2048.csv",
-                f"{root}/RPCholesky/rpcholesky_*_m=2048*.csv",
-            ),
-            "DeltaVFE": (
-                f"{root}/DeltaVFE/deltavfe_kernelwidth=*_noise2=*_m=2048_s={s}.csv",
-                f"{root}/DeltaVFE/deltavfe_*_m=2048*_s={s}*.csv",
-            )}
-
-    raise ValueError("dataset must be 'qm7' or 'abalone'")
+    root = dataset_info(dataset)["dir"]
+    sub, base = {"Greedy": ("Greedy", "greedy"), "RPCholesky": ("RPCholesky", "rpcholesky"),
+                 "DeltaVFE": ("DeltaVFE", "deltavfe")}[method]
+    s_part = f"_s={s}" if method == "DeltaVFE" else ""
+    files = sorted(glob.glob(f"{root}/{sub}/{base}_kernelwidth=*_noise2=*_m={'*' if m is None else m}{s_part}.csv"))
+    if files and m is None:
+        m_max = max(_m_of(f) for f in files)
+        files = [f for f in files if _m_of(f) == m_max]
+    return files
 
 
-def load_method_data(dataset: str, trace: pd.DataFrame, s: int = 16) -> pd.DataFrame:
-    df = pd.concat([load_csvs_any(*patterns).assign(Method=method) for method, patterns in method_patterns(dataset, s).items()], ignore_index=True)
-    to_numeric(df, ["RunID", "Seed", "Rank", "Kernelwidth", "Noise2", "RMSE", "MAE", "ELBO", "TraceErr"])
-    df = df.dropna(subset=["Rank"]).copy()
-    df["Rank"] = df["Rank"].astype(int)
-
-    if dataset == "qm7":
-        if "Fold" not in df.columns:
-            df = add_fold_from_source(df)
-        df = df.dropna(subset=["Fold"])
-        df["Fold"] = pd.to_numeric(df["Fold"], errors="coerce").astype("Int64")
-        df = df.merge(trace, on="Fold", how="left")
-        return df.sort_values(["Method", "Fold", "Rank"]).reset_index(drop=True)
-
-    if {"Kernelwidth", "Noise2"}.issubset(df.columns) and {"Kernelwidth", "Noise2"}.issubset(trace.columns):
-        df = df.merge(trace[["Kernelwidth", "Noise2", "TrK"]].drop_duplicates(), on=["Kernelwidth", "Noise2"], how="left")
-    else:
-        df["TrK"] = float(trace["TrK"].mean())
-    return df.sort_values(["Method", "Rank"]).reset_index(drop=True)
+def load_baseline(dataset: str) -> pd.DataFrame:
+    """All full-GP baseline files of a dataset (one row per hyperparameter setting)."""
+    files = sorted(glob.glob(f"{dataset_info(dataset)['dir']}/Full/baseline_kernelwidth=*_noise2=*.csv"))
+    if not files:
+        raise FileNotFoundError(f"No full-GP baseline found in {dataset_info(dataset)['dir']}/Full "
+                                f"(run the experiment with skip_baseline=False).")
+    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    return to_numeric(df, list(df.columns))
 
 
 def choose_one_hyper_setting(df: pd.DataFrame) -> pd.DataFrame:
@@ -238,45 +164,120 @@ def choose_one_hyper_setting(df: pd.DataFrame) -> pd.DataFrame:
     return df[(df["Kernelwidth"] == kw) & (df["Noise2"] == nz)].copy()
 
 
-def choose_one_hyper_setting_per_group(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
-    if not {"Kernelwidth", "Noise2"}.issubset(df.columns):
-        return df.copy()
+def baseline_for(df: pd.DataFrame, baseline: pd.DataFrame) -> pd.Series:
+    """Baseline row with the same hyperparameters as the results in df."""
+    kw, nz = float(df["Kernelwidth"].iloc[0]), float(df["Noise2"].iloc[0])
+    hit = baseline[np.isclose(baseline["Kernelwidth"], kw, rtol=1e-12) & np.isclose(baseline["Noise2"], nz, rtol=1e-12)]
+    if hit.empty:
+        raise FileNotFoundError(f"No full-GP baseline for kernelwidth={kw}, noise2={nz}.")
+    return hit.iloc[0]
+
+
+def add_derived_columns(df: pd.DataFrame, base: pd.Series) -> pd.DataFrame:
+    """
+    Make sure the derived columns exist. Result files written by the current core.py already contain them; for older
+    files they are computed from ELBO, TraceErr and the full-GP baseline (log marginal likelihood, trace, n).
+    """
+    df = df.copy()
+    logml = float(base["Logml"])
+    if "TraceErrRel" not in df.columns:
+        df["TraceErrRel"] = df["TraceErr"].abs() / float(base["TrK"])
+    if "VFEGap" not in df.columns:
+        df["VFEGap"] = logml - df["ELBO"]
+    if "VFEGapPerPoint" not in df.columns:
+        df["VFEGapPerPoint"] = df["VFEGap"] / float(base["n_train"])
+    if "VFEGapRel" not in df.columns:
+        df["VFEGapRel"] = (df["ELBO"] - logml).abs() / abs(logml)
+    df["VFEGapRel"] = df["VFEGapRel"].clip(lower=VFE_GAP_FLOOR)
+    return df
+
+
+def load_results(dataset: str, methods=METHODS, s=None, m: int | None = None) -> tuple[pd.DataFrame, pd.Series]:
+    """
+    Load the result files of a dataset, one hyperparameter setting, with derived columns.
+
+    :param dataset: "Abalone", "QM7", "KIN40K" or "QM9".
+    :param methods: methods to load.
+    :param s: batch factor(s) of Delta-VFE: an int, a list of ints, or "all". Default: the dataset's default s.
+    :param m: maximum rank of the runs (default: the largest available).
+    :return: (results with columns Method, s, RunID, Rank, metrics ..., full-GP baseline row)
+    """
+    s = dataset_info(dataset)["s"] if s is None else s
+    s_list = None if s == "all" else ([s] if np.isscalar(s) else list(s))
     parts = []
-    for _, g in df.groupby(group_cols, dropna=False):
-        kw, nz = g.groupby(["Kernelwidth", "Noise2"]).size().sort_values(ascending=False).index[0]
-        parts.append(g[(g["Kernelwidth"] == kw) & (g["Noise2"] == nz)].copy())
-    return pd.concat(parts, ignore_index=True)
+    for method in methods:
+        if method == "DeltaVFE":
+            files = [f for v in (s_list or ["*"]) for f in method_files(dataset, method, s=v, m=m)]
+            available = sorted({int(re.search(r"_s=(\d+)", os.path.basename(f)).group(1))
+                                for f in method_files(dataset, method, s="*", m=m)})
+            if not files and s_list and len(s_list) == 1 and available:
+                # requested s not (yet) computed: use the available s closest to it (on a log scale)
+                s_use = min(available, key=lambda v: (abs(np.log2(v) - np.log2(s_list[0])), -v))
+                print(f"NOTE: no Delta-VFE results with s={s_list[0]} for {dataset}; using s={s_use} "
+                      f"(available: {available})")
+                files = method_files(dataset, method, s=s_use, m=m)
+        else:
+            files = method_files(dataset, method, m=m)
+        if not files:
+            root = dataset_info(dataset)["dir"]
+            sub = {"Greedy": "Greedy", "RPCholesky": "RPCholesky", "DeltaVFE": "DeltaVFE"}[method]
+            present = sorted(os.path.basename(f) for f in glob.glob(f"{root}/{sub}/*.csv"))
+            print(f"WARNING: no {method} results for {dataset} matching "
+                  f"'{method_files.__name__}' (files in {root}/{sub}: {present[:6]}{' ...' if len(present) > 6 else ''})")
+            continue
+        df = pd.concat([pd.read_csv(f).assign(__source__=os.path.basename(f)) for f in files], ignore_index=True)
+        df = add_s_from_source(df).assign(Method=method)
+        parts.append(df)
+    if not parts:
+        raise FileNotFoundError(f"No result files for {dataset} in {dataset_info(dataset)['dir']}.")
+    df = pd.concat(parts, ignore_index=True)
+    df = to_numeric(df, [c for c in df.columns if c not in ("Method", "__source__")])
+    df = choose_one_hyper_setting(df.dropna(subset=["Rank"]))
+    df["Rank"] = df["Rank"].astype(int)
+    base = baseline_for(df, load_baseline(dataset))
+    df = add_derived_columns(df, base)
+    # distinct kernel columns evaluated during the selection up to rank r (written by core.run_method): r for Greedy
+    # and RPCholesky; for Delta-VFE every column among the candidates drawn so far, counted once (at most n).
+    # Result files written before this column existed: r for Greedy/RPCholesky, missing (NaN) for Delta-VFE.
+    if "KernelColumns" not in df.columns:
+        df["KernelColumns"] = np.nan
+    one_per_pivot = df["Method"] != "DeltaVFE"
+    kc = pd.to_numeric(df["KernelColumns"], errors="coerce").to_numpy(dtype=float)
+    df["KernelColumns"] = np.where(one_per_pivot.to_numpy() & np.isnan(kc), df["Rank"].to_numpy(dtype=float), kc)
+    if df.loc[~one_per_pivot, "KernelColumns"].isna().any():
+        print(f"NOTE: Delta-VFE results of {dataset} have no KernelColumns column (written before it was added); "
+              f"they are left out of the kernel-columns panel. Add it with add_kernel_columns.add_kernel_columns"
+              f"('{dataset}') or ADD_KERNEL_COLUMNS = True in plot_results.py")
+    return df.sort_values(["Method", "s", "RunID", "Rank"]).reset_index(drop=True), base
 
 
-# Aggregation
-def aggregate_prediction(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
-    metric = "MAE" if dataset == "qm7" else "RMSE"
-    groups = ["Method", "Fold", "Rank"] if dataset == "qm7" else ["Method", *( ["RunID"] if "RunID" in df.columns else [] ), "Rank"]
-    return choose_one_hyper_setting(df).dropna(subset=[metric]).groupby(groups, as_index=False).agg(**{metric: (metric, "mean")})
+def error_metric(df: pd.DataFrame, dataset: str) -> str:
+    """The prediction-error column used for a dataset (first available of DATASETS[dataset]['error'])."""
+    for col in dataset_info(dataset)["error"]:
+        if col in df.columns and df[col].notna().any():
+            return col
+    raise KeyError(f"None of {dataset_info(dataset)['error']} in the results of {dataset}.")
 
 
-def aggregate_vfe(df: pd.DataFrame, dataset: str, elbo_full: float) -> pd.DataFrame:
-    needed = ["ELBO", "TraceErr", "MAE" if dataset == "qm7" else "RMSE"]
-    groups = ["Method", "Fold", "Rank"] if dataset == "qm7" else ["Method", *( ["RunID"] if "RunID" in df.columns else [] ), "Rank"]
-    extra = {c: (c, "first") for c in ["Kernelwidth", "Noise2", "TrK"] if c in df.columns}
-    out = (choose_one_hyper_setting(df).dropna(subset=needed).groupby(groups, as_index=False).agg(ELBO=("ELBO", "mean"), TraceErr=("TraceErr", "mean"), **extra))
-    out["TraceErrRel"] = out["TraceErr"].abs() / out["TrK"]
-    out["RelativeVFE"] = (out["ELBO"].sub(elbo_full).abs() / abs(elbo_full)).clip(lower=VFE_GAP_FLOOR)
-    return out
-
-
-def aggregate_qm7_s(df: pd.DataFrame, has_s: bool) -> pd.DataFrame:
-    group = ["Method", "s"] if has_s else ["Method"]
-    out_group = ["Method", *( ["s"] if has_s else [] ), "Fold", "Rank"]
-    return (choose_one_hyper_setting_per_group(df, group).dropna(subset=["MAE", "VFEGapRel", "TraceErrRel"])
-            .groupby(out_group, as_index=False).agg(MAE=("MAE", "mean"), VFEGapRel=("VFEGapRel", "mean"), TraceErrRel=("TraceErrRel", "mean")))
+def baseline_value(base: pd.Series, metric: str) -> float:
+    col = BASELINE_COLUMN.get(metric)
+    return float(base[col]) if col in base.index and pd.notna(base[col]) else np.nan
 
 
 # Plot helpers
 def set_log2_x(ax):
     ax.set_xscale("log", base=2)
-    ax.get_xaxis().set_major_formatter(ScalarFormatter())
-    ax.ticklabel_format(axis="x", style="plain")
+    ax.get_xaxis().set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+
+
+def consistent_log_ticks(axis):
+    """
+    Major ticks at every power of 10 that matplotlib labels and minor ticks at 1..9 x 10^k in every decade, also when
+    the axis spans many decades (matplotlib's default then thins out the major ticks and drops the minor ticks, so the
+    minor grid disappears, e.g. for Abalone).
+    """
+    axis.set_minor_locator(LogLocator(base=10.0, subs=np.arange(1.0, 10.0), numticks=999))
+    # minor labels: matplotlib's default (only on axes spanning about one decade or less, e.g. the RMSE panels)
 
 
 def format_panel(ax, ylabel: str, log_y: bool = True):
@@ -284,6 +285,7 @@ def format_panel(ax, ylabel: str, log_y: bool = True):
     ax.set_ylabel(ylabel)
     if log_y:
         ax.set_yscale("log")
+        consistent_log_ticks(ax.yaxis)
     ax.grid(True, which="major", linestyle="-", color="0.85")
     ax.grid(True, which="minor", linestyle=":", color="0.9")
     set_log2_x(ax)
@@ -388,3 +390,67 @@ def matplotlib_line_errorbars(ax, data, metric, method, error="sd", markersize=4
                 label=METHOD_LABELS.get(method, method), color=st["color"], linestyle=st["linestyle"],
                 marker=st["marker"], markersize=markersize, linewidth=linewidth, markeredgewidth=0.0, capsize=3,
                 elinewidth=1.0, capthick=1.0, zorder=2)
+
+def plot_metric(ax, df: pd.DataFrame, metric: str, dataset: str, methods=METHODS, baseline: float | None = None):
+    """
+    One panel: metric against rank for each method, with the dataset's error band (sd or 95% CI over the runs).
+    VFE gaps are drawn with error bars, the other metrics with seaborn. Metrics that can be negative (MSLL, NLPD) get
+    a linear y-axis. If baseline is a finite number, the full-GP value is drawn as a horizontal line.
+    """
+    band = dataset_info(dataset)["band"]
+    log_y = metric not in LINEAR_METRICS
+    for method in methods:
+        d = df[df["Method"] == method]
+        if d.empty or metric not in d.columns or d[metric].isna().all():
+            continue
+        if metric.startswith("VFEGap"):
+            matplotlib_line_errorbars(ax, d, metric, method, error=band, require_positive=log_y)
+        else:
+            seaborn_line(ax, d, metric, method, error=band, require_positive=log_y)
+    if baseline is not None and np.isfinite(baseline):
+        add_full_baseline(ax, int(df["Rank"].min()), int(df["Rank"].max()), baseline)
+    format_panel(ax, metric_label(metric, dataset), log_y=log_y)
+
+
+def datasets_from_argv(argv, default):
+    """Dataset names from the command line (case-insensitive), e.g. `python plot_results.py KIN40K QM9`."""
+    names = {k.lower(): k for k in DATASETS}
+    chosen = [names[a.lower()] for a in argv] if argv else list(default)
+    unknown = [a for a in argv if a.lower() not in names]
+    if unknown:
+        raise SystemExit(f"Unknown dataset(s) {unknown}; choose from {list(DATASETS)}")
+    return chosen
+
+
+def plot_metric_vs_cost(ax, df: pd.DataFrame, metric: str, dataset: str, methods=METHODS):
+    """
+    One panel: metric against the number of kernel columns computed during the selection (KernelColumns; each
+    computed column is kept, so a candidate drawn again is not recomputed),
+    mean over the runs with the dataset's error band (sd or 95% CI), log-log axes.
+    """
+    band = dataset_info(dataset)["band"]
+    for method in methods:
+        d = df[df["Method"] == method]
+        if d.empty or metric not in d.columns or d[metric].isna().all():
+            continue
+        d = positive_finite(d.dropna(subset=["KernelColumns"]), metric)
+        if d.empty:
+            continue
+        st = STYLE[method]
+        stats = d.groupby("Rank").agg(x=("KernelColumns", "mean"), mean=(metric, "mean"), std=(metric, "std"),
+                                      n=(metric, "count")).sort_values("x")
+        y = stats["mean"].to_numpy(dtype=float)
+        err = stats["std"].fillna(0.0)
+        yerr = (1.96 * err / np.sqrt(stats["n"].clip(lower=1)) if band == "ci95" else err).to_numpy(dtype=float)
+        ax.errorbar(stats["x"], y, yerr=[np.minimum(yerr, np.maximum(y * (1.0 - 1e-12), 0.0)), yerr],
+                    label=METHOD_LABELS.get(method, method), color=st["color"], linestyle=st["linestyle"],
+                    marker=st["marker"], markersize=4.8, linewidth=1.6, markeredgewidth=0.0, capsize=3,
+                    elinewidth=1.0, capthick=1.0, zorder=2)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    consistent_log_ticks(ax.xaxis)
+    consistent_log_ticks(ax.yaxis)
+    ax.set_xlabel("Kernel columns computed")
+    ax.set_ylabel(metric_label(metric, dataset))
+    ax.grid(True, which="major", linestyle="-", color="0.85")
+    ax.grid(True, which="minor", linestyle=":", color="0.9")

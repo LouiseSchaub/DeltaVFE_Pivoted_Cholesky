@@ -1,52 +1,49 @@
 """
-Use this script to produce Figure 2, i.e. a side-by-side prediction error for Abalone (left) and QM7 (right).
+Prediction error against the rank, one figure per dataset. The error measure is set in plot_utils.DATASETS: RMSE
+(Abalone), MAE in kcal/mol (QM7), SMSE (KIN40K), MAE in eV (QM9); the dotted line is the full GP. If the results contain
+MSLL (written by the current core.py), it is shown in a second panel.
+
+Usage: python plot_prediction.py [DATASET ...]
+       Without arguments a figure is made for every dataset with results (Abalone, QM7, KIN40K, QM9).
+Output: Plots/<dataset>_prediction_error.pdf
 """
 import os
+import sys
+
 from matplotlib import gridspec
 import matplotlib.pyplot as plt
 
-from plot_utils import (METHODS, PLOTS_DIR, aggregate_prediction, add_full_baseline, format_panel, load_full_baseline,
-                        load_method_data, load_trace, save_show, seaborn_line_ci95, seaborn_line_sd, shared_legend)
+from plot_utils import (DATASETS, FIGSIZE_ROW, GRID_ROW, PLOTS_DIR, baseline_value, datasets_from_argv, error_metric,
+                        load_results, plot_metric, save_show, shared_legend)
 
 
-def plot_prediction_side_by_side(df_qm7, df_abalone, mae_full_qm7, rmse_full_abalone, outfile=None):
+def plot_prediction(df, base, dataset, outfile=None):
     """
-    Plotting routine for Figure 1.
-
-    :param df_qm7: DataFrame for QM7.
-    :param df_abalone: DataFrame for Abalone.
-    :param mae_full_qm7: Reference MAE baseline.
-    :param rmse_full_abalone: Reference RMSE baseline.
-    :param outfile: Filename
-    :return: Figure with subplots.
+    :param df: results of one dataset from plot_utils.load_results.
+    :param base: full-GP baseline row from plot_utils.load_results.
+    :param dataset: dataset name.
+    :param outfile: file name of the figure.
     """
-    x_min = int(min(df_qm7["Rank"].min(), df_abalone["Rank"].min()))
-    x_max = int(max(df_qm7["Rank"].max(), df_abalone["Rank"].max()))
-
-    fig = plt.figure(figsize=(10.8, 5.4))
-    gs = gridspec.GridSpec(2, 2, height_ratios=[5, 1.15], width_ratios=[1, 1], hspace=0.25, wspace=0.25)
-    ax_abalone, ax_qm7, legend_ax = fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1]), fig.add_subplot(gs[1, :])
-
-    for method in METHODS:
-        if method in df_abalone["Method"].unique():
-            seaborn_line_sd(ax_abalone, df_abalone[df_abalone["Method"] == method], "RMSE", method)
-        if method in df_qm7["Method"].unique():
-            seaborn_line_ci95(ax_qm7, df_qm7[df_qm7["Method"] == method], "MAE", method)
-
-    add_full_baseline(ax_abalone, x_min, x_max, rmse_full_abalone)
-    add_full_baseline(ax_qm7, x_min, x_max, mae_full_qm7)
-    format_panel(ax_abalone, "RMSE")
-    format_panel(ax_qm7, "MAE")
-    shared_legend(legend_ax, [ax_abalone, ax_qm7], ncol=4)
+    metric = error_metric(df, dataset)
+    panels = [metric] + (["MSLL"] if "MSLL" in df.columns and df["MSLL"].notna().any() else [])
+    fig = plt.figure(figsize=FIGSIZE_ROW)
+    gs = gridspec.GridSpec(2, len(panels), **GRID_ROW)
+    axes = []
+    for j, m in enumerate(panels):
+        ax = fig.add_subplot(gs[0, j])
+        plot_metric(ax, df, m, dataset, baseline=baseline_value(base, m) if m == metric else None)
+        axes.append(ax)
+    fig.suptitle(dataset)
+    shared_legend(fig.add_subplot(gs[1, :]), axes, ncol=4)
     save_show(fig, outfile)
-    return fig, (ax_abalone, ax_qm7, legend_ax)
+    return fig, axes
 
 
 if __name__ == "__main__":
-    qm7 = aggregate_prediction(load_method_data("qm7", load_trace("qm7")), "qm7")
-    abalone = aggregate_prediction(load_method_data("abalone", load_trace("abalone")), "abalone")
-    mae_qm7, _ = load_full_baseline("qm7")
-    rmse_abalone, _ = load_full_baseline("abalone")
-
-    plot_prediction_side_by_side(qm7, abalone, mae_qm7, rmse_abalone,
-                                 outfile=os.path.join(PLOTS_DIR, "abalone_qm7_prediction_error_side_by_side.pdf"))
+    for dataset in datasets_from_argv(sys.argv[1:], default=list(DATASETS)):
+        try:
+            df, base = load_results(dataset)
+        except FileNotFoundError as e:
+            print(f"Skipping {dataset}: {e}")
+            continue
+        plot_prediction(df, base, dataset, outfile=os.path.join(PLOTS_DIR, f"{dataset.lower()}_prediction_error.pdf"))

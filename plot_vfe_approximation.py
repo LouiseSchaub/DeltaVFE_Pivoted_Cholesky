@@ -8,6 +8,7 @@ Use this script to produce Figure 1, i.e. the four panel view of relative VFE an
 import os
 from matplotlib import gridspec
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from plot_utils import (METHODS, PLOTS_DIR, aggregate_vfe, format_panel, load_full_baseline, load_method_data,
                         load_trace, matplotlib_line_errorbars, save_show, seaborn_line_ci95, seaborn_line_sd,
@@ -40,6 +41,26 @@ def plot_fourpanel(df_qm7, df_abalone, outfile=None):
     save_show(fig, outfile)
     return fig, (*axes, legend_ax)
 
+def plot_single(df, outfile=None, metric="RelativeVFE", error="sd", ylabel=None, title:str=None):
+    fig, ax = plt.subplots(figsize=(12.8, 7.2))
+
+    for method in METHODS:
+        sub = df[df["Method"] == method]
+        if not sub.empty:
+            matplotlib_line_errorbars(
+                ax,
+                sub,
+                metric,
+                method,
+                error=error
+            )
+
+    format_panel(ax, ylabel or VFE_LABEL)
+    ax.legend(frameon=True)
+    ax.title.set_text(title)
+
+    save_show(fig, outfile)
+    return fig, ax
 
 if __name__ == "__main__":
     _, elbo_qm7 = load_full_baseline("qm7")
@@ -47,5 +68,8 @@ if __name__ == "__main__":
     qm7 = aggregate_vfe(load_method_data("qm7", load_trace("qm7")), "qm7", elbo_qm7)
     abalone = aggregate_vfe(load_method_data("abalone", load_trace("abalone")), "abalone", elbo_abalone)
 
-    plot_fourpanel(qm7, abalone,
-                   outfile=os.path.join(PLOTS_DIR, "abalone_qm7_relative_vfe_relative_approx_fourpanel_log.pdf"))
+    #plot_fourpanel(qm7, abalone,
+    #               outfile=os.path.join(PLOTS_DIR, "abalone_qm7_relative_vfe_relative_approx_fourpanel_log.pdf"))
+
+    plot_single(qm7, metric="RelativeVFE", outfile="Plots/qm7_single_relative_vfe.pdf")
+    plot_single(qm7, metric="TraceErrRel", ylabel=r"$|\mathrm{tr}(K)-\mathrm{tr}(\widetilde{K})|/\mathrm{tr}(K)$",outfile="Plots/qm7_single_trace_norm.pdf")
