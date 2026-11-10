@@ -1,3 +1,4 @@
+
 """
 RBF two-objective stress test.
 
@@ -36,7 +37,8 @@ Repository functions used
 - RBF kernel:                      kernels.gaussian_kernel
 - Plotting theme:                  plot_utils
 
-Output: Data/RBFStressTest/ (CSV, diagnostics) and Plots/rbf_*.pdf
+Output: Data/RBFStressTest/ (CSV, diagnostics), Plots/rbf_clusters.pdf (data overview and cluster zoom) and
+Plots/rbf_rank_vs_vfe_gap.pdf
 """
 
 from itertools import combinations
@@ -52,7 +54,8 @@ from delta_vfe_fast import delta_vfe_pivots_fast
 from helpers import build_L_from_pivots_paper, compute_B, vfe_history
 from kernels import gaussian_kernel
 from metrics import gp_neg_log_marginal_likelihood, vfe_bound
-from plot_utils import PLOTS_DIR  # importing plot_utils also applies the plotting theme of the repository
+from matplotlib import gridspec
+from plot_utils import FIGSIZE_ROW, GRID_ROW, PLOTS_DIR, VFE_PP_LABEL, shared_legend
 from rpcholesky import rpcholesky_pivots
 
 
@@ -291,46 +294,33 @@ def summarize_methods(methods, signal_counts, timings):
     return pd.DataFrame(rows)
 
 
-def plot_data(problem, filename):
-    # sns.set_theme(style="whitegrid", context="paper", palette="colorblind")
+def plot_clusters(problem, filename, cluster_id=None):
+    """Data overview (left) and zoom into one existing cluster (right) in one figure.
+
+    The zoom defaults to the first response-bearing cluster; pass cluster_id=0 to inspect the first zero-response
+    cluster instead. Neither x nor y is jittered or modified for this visualization.
+    """
     x = problem["x"]
     y = problem["y"]
     labels = problem["labels"]
     nuisance_clusters = problem["nuisance_clusters"]
 
-    fig, ax = plt.subplots(figsize=(9.0, 4.2))
+    fig = plt.figure(figsize=FIGSIZE_ROW)
+    gs = gridspec.GridSpec(2, 2, **GRID_ROW)
+    ax, ax_zoom, legend_ax = fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1]), fig.add_subplot(gs[1, :])
 
+    # left: all clusters
     nuisance = labels < nuisance_clusters
     signal = ~nuisance
 
     ax.scatter(x[nuisance], y[nuisance], s=18, label="Zero output clusters")
     ax.scatter(x[signal], y[signal], s=18, label="Non-zero output clusters")
-
-    #ax.set_xscale("log",base=2)
-    #ax.set_yscale("log")
     ax.set_xlabel(r"Input $x$")
     ax.set_ylabel(r"Output $y$")
-    #ax.set_title("Adversarial example - Clustered data")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(filename, dpi=180)
-    fig.show()
-    plt.close(fig)
 
-def plot_cluster_zoom(problem, filename, cluster_id=None):
-    """Zoom in on one *existing* cluster to reveal individual x locations.
-
-    Defaults to the first response-bearing cluster; pass cluster_id=0 to
-    inspect the first zero-response cluster instead. Neither x nor y is
-    jittered or modified for this visualization.
-    """
-    x = problem["x"]
-    y = problem["y"]
-    labels = problem["labels"]
-    n_nuisance = problem["nuisance_clusters"]
-
+    # right: one cluster
     if cluster_id is None:
-        cluster_id = n_nuisance
+        cluster_id = nuisance_clusters
     cluster_id = int(cluster_id)
     if not 0 <= cluster_id < len(problem["centers"]):
         raise ValueError("cluster_id must identify an existing cluster")
@@ -345,69 +335,70 @@ def plot_cluster_zoom(problem, filename, cluster_id=None):
     # x-coordinates, however, are different and are plotted without jitter.
     center_y = float(np.mean(y_cluster))
     ypad = 0.5  # display-only padding, not a change in the response data
-    fig, ax = plt.subplots(figsize=(9.0, 3.4))
-    ax.scatter(x_cluster, y_cluster, s=56, edgecolors="white",
-               linewidths=0.7, zorder=3,
-               label=f"{len(x_cluster)} individual observations")
+    color = "C1" if cluster_id >= nuisance_clusters else "C0"
+    ax_zoom.scatter(x_cluster, y_cluster, s=56, color=color, edgecolors="white", linewidths=0.7, zorder=3,
+                    label=f"Non-zero output cluster (zoomed-in)")
 
     span = float(np.ptp(x_cluster))
     margin = max(0.08 * span, 1e-5)
-    ax.set_xlim(float(np.min(x_cluster)) - margin,
-                float(np.max(x_cluster)) + margin)
-    ax.set_ylim(center_y - ypad, center_y + 0.25)
-    ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(7))
-    ax.xaxis.set_major_formatter(mpl.ticker.FormatStrFormatter("%.4f"))
-    ax.yaxis.set_major_locator(mpl.ticker.MaxNLocator(4))
-    kind = "Non-zero response cluster" if cluster_id >= n_nuisance else "Zero-response"
-    # ax.set_title(f"Zoom: {kind.lower()} cluster {cluster_id + 1} "
-    #              f"({len(x_cluster)} distinct input points)")
-    ax.set_xlabel(r"Input $x$")
-    ax.set_ylabel(r"Output $y$")
-    ax.legend(loc="lower center", fontsize=9)
-    fig.tight_layout()
-    fig.savefig(filename, dpi=300)
+    ax_zoom.set_xlim(float(np.min(x_cluster)) - margin, float(np.max(x_cluster)) + margin)
+    ax_zoom.set_ylim(center_y - ypad, center_y + 0.25)
+    ax_zoom.xaxis.set_major_locator(mpl.ticker.MaxNLocator(4))
+    ax_zoom.xaxis.set_major_formatter(mpl.ticker.FormatStrFormatter("%.4f"))
+    ax_zoom.yaxis.set_major_locator(mpl.ticker.MaxNLocator(4))
+    ax_zoom.set_xlabel(r"Input $x$")
+    ax_zoom.set_ylabel(r"Output $y$")
+
+    shared_legend(legend_ax, [ax, ax_zoom], ncol=3)
+    fig.savefig(filename, dpi=300, bbox_inches="tight")
     fig.show()
     plt.close(fig)
 
 
-def plot_vfe_curve(summary, fro_gaps, exhaustive_gaps, filename):
-    fig, ax = plt.subplots(figsize=(8.0, 4.8))
+def plot_vfe_curve(summary, fro_gaps, exhaustive_gaps, filename, n=None):
+    """
+    VFE gap F(K) - L(K~) against the rank. If n is given, every curve is divided by n, i.e. the VFE gap per data point
+    (F(K) - L(K~)) / n in nats, as in the dataset figures (plot_results.py).
+    """
+    scale = 1.0 if n is None else 1.0 / n
+    fig = plt.figure(figsize=FIGSIZE_ROW)
+    gs = gridspec.GridSpec(2, 1, **GRID_ROW)
+    ax, legend_ax = fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[1, 0])
 
     markers = ['s', '^', 'o']
     for method, marker in zip(summary["method"].unique(), markers):
         data = summary[summary["method"] == method].sort_values("rank")
         ax.plot(
             data["rank"],
-            data["mean_vfe_gap"],
+            data["mean_vfe_gap"] * scale,
             marker=marker,
             label=method,
         )
 
     ranks = np.arange(1, len(fro_gaps) + 1)
 
-    ax.plot(ranks, fro_gaps, marker="*", linestyle="--", label="Best Frobenius rank-r")
+    ax.plot(ranks, np.asarray(fro_gaps) * scale, marker="*", linestyle="--", label="Best Frobenius rank-r")
 
     ax.plot(
         ranks,
-        exhaustive_gaps,
+        np.asarray(exhaustive_gaps) * scale,
         marker="o",
         linestyle="--",
-        label="Exhaustive exact Delta-VFE greedy",
+        label=r"Exhaustive exact $\Delta$-VFE greedy",
     )
 
     ax.set_yscale("log")
     ax.set_xlabel("Rank")
-    ax.set_ylabel("VFE gap")
-    #ax.set_title("RBF clustered example: rank vs VFE gap")
-    ax.legend(fontsize=8)
-    fig.tight_layout()
-    fig.savefig(filename, dpi=300)
+    ax.set_ylabel(VFE_PP_LABEL if n is not None else r"$\mathcal{F}(K)-\mathcal{L}(\widetilde{K})/n$")
+    # ax.set_title("RBF clustered example: rank vs VFE gap")
+    shared_legend(legend_ax, [ax], ncol=4)
+    fig.savefig(filename, dpi=300, bbox_inches="tight")
     fig.show()
     plt.close(fig)
 
 
 def plot_signal_pivots(summary, filename):
-    fig, ax = plt.subplots(figsize=(8.0, 4.8))
+    fig, ax = plt.subplots(figsize=FIGSIZE_ROW)
 
     for method in summary["method"].unique():
         data = summary[summary["method"] == method].sort_values("rank")
@@ -436,9 +427,9 @@ def main():
     trials = 200
     s = 8
 
-    output_dir = Path("Data/QM7_Folds/Data/RBFStressTest")
+    output_dir = Path("Data/Adversarial")
     output_dir.mkdir(parents=True, exist_ok=True)
-    plots_dir = Path(PLOTS_DIR)
+    plots_dir = Path("Plots/Adversarial")
 
     K = problem["K"]
     y = problem["y"]
@@ -484,9 +475,9 @@ def main():
         index=False,
     )
 
-    plot_data(problem, plots_dir / "rbf_data_setup.pdf")
-    plot_cluster_zoom(problem, plots_dir / "rbf_cluster_zoom.pdf")
-    plot_vfe_curve(summary, fro_gaps, exhaustive_gaps, plots_dir / "rbf_rank_vs_vfe_gap.pdf")
+    plot_clusters(problem, "Plots/Adversarial/rbf_clusters.pdf")
+    plot_vfe_curve(summary, fro_gaps, exhaustive_gaps, "Plots/Adversarial/rbf_rank_vs_vfe_gap.pdf", n=len(y))
+    #plot_vfe_curve(summary, fro_gaps, exhaustive_gaps, plots_dir / "rbf_rank_vs_vfe_gap.pdf")
     #plot_signal_pivots(summary, plots_dir / "rbf_signal_pivots_vs_rank.png")
 
     with open(output_dir / "diagnostics.txt", "w", encoding="utf-8") as fh:
